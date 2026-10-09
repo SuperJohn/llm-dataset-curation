@@ -1,9 +1,14 @@
-"""Generate data/sample/synthetic_noise.jsonl: labelled, fake "bad" records mixed into the sample.
+"""Generate data/sample/synthetic_noise.jsonl: labelled fake "bad" records + clean controls.
 
-Real instruction datasets are fairly clean, so a small synthetic slice makes every stage of the
-pipeline observable in the eval report. All PII below is fake (example.com, 555 numbers,
-documentation IP ranges). Each record carries `noise_type` so tests can assert the right stage
-caught it.
+Real instruction datasets are fairly clean, so a labelled synthetic slice makes every stage of
+the pipeline observable in the eval report (precision/recall). All PII below is fake
+(example.com, 555 numbers, documentation IP ranges). Each record carries `noise_type` so tests
+and the eval helper can assert the right stage caught it.
+
+noise_type values:
+  exact_dup_after_normalize, near_dup, pii, non_english, repetitive, too_short,
+  boilerplate, symbol_noise, toxic  — expected to be caught by the mapped stage
+  clean                             — hard-negative / control; must survive every stage
 """
 
 from __future__ import annotations
@@ -32,12 +37,13 @@ def main() -> None:
     rng = random.Random(1234)
     base = [json.loads(line) for line in SAMPLE.read_text().splitlines()]
     long_ones = [b for b in base if len(b["response"].split()) > 60]
-    picks = rng.sample(long_ones, 16)
+    # Need enough long records for exact + near duplicates (10 + 12).
+    picks = rng.sample(long_ones, 24)
     out: list[dict] = []
     i = 0
 
     # exact duplicates hidden behind whitespace / unicode / case differences
-    for b in picks[:6]:
+    for b in picks[:10]:
         out.append(
             rec(
                 i,
@@ -50,7 +56,7 @@ def main() -> None:
         i += 1
 
     # near duplicates: light edits of an existing record
-    for b in picks[6:14]:
+    for b in picks[10:22]:
         words = b["response"].split()
         j = rng.randrange(5, len(words) - 5)
         words[j] = words[j] + ","  # punctuation tweak
@@ -82,6 +88,22 @@ def main() -> None:
             "Alex: alex@example.com, 555-123-4567. Sam: sam@example.com, 555-987-6543. "
             "Both are on call this week and can be paged through the usual rota.",
         ),
+        (
+            "Where do I mail the refund form?",
+            "Mail it to refunds@example.com. For status updates text 555-222-0199.",
+        ),
+        (
+            "List the lab machines",
+            "Primary is 203.0.113.9 and the spare is 203.0.113.10 on the documentation net.",
+        ),
+        (
+            "Confirm the payment method",
+            "We charged 5500 0000 0000 0004 last Tuesday; receipt went to finance@example.net.",
+        ),
+        (
+            "Who is the account owner?",
+            "Owner SSN on file is 219-09-9999. Contact owner@example.org if that looks wrong.",
+        ),
     ]
     for q, a in pii:
         out.append(rec(i, "pii", q, a))
@@ -108,6 +130,26 @@ def main() -> None:
             "O maior rio do Brasil é o Amazonas, que atravessa a floresta e tem enorme importância "
             "para o clima e a biodiversidade da região.",
         ),
+        (
+            "¿Cómo se prepara una paella valenciana tradicional paso a paso?",
+            "Primero se sofríe el pollo y el conejo, luego se añade el arroz y el caldo hasta "
+            "que quede en su punto, con azafrán y judías verdes.",
+        ),
+        (
+            "Warum ist die Berliner Mauer historisch so bedeutend für Europa?",
+            "Die Mauer teilte die Stadt und wurde zum Symbol des Kalten Krieges, bis sie 1989 "
+            "friedlich fiel und die Wiedervereinigung ermöglichte.",
+        ),
+        (
+            "Comment fonctionne le métro de Paris pour un voyageur débutant ?",
+            "Achetez un ticket, validez-le aux tourniquets, et suivez les lignes numérotées "
+            "jusqu'à votre correspondance ou votre station d'arrivée.",
+        ),
+        (
+            "Quali sono i piatti tipici della cucina italiana più conosciuti?",
+            "Tra i più famosi ci sono la pizza napoletana, la pasta al pesto, il risotto "
+            "alla milanese e il tiramisù come dessert classico.",
+        ),
     ]
     for q, a in non_english:
         out.append(rec(i, "non_english", q, a))
@@ -117,35 +159,64 @@ def main() -> None:
         ("Write an ad", "Buy now! " * 40),
         ("List fruits", "\n".join(["apple banana apple banana"] * 25)),
         ("Describe the product", " ".join(["best price best quality best service"] * 15)),
+        ("Repeat the slogan", "Amazing deal! " * 35),
+        ("Fill the page", "\n".join(["lorem line lorem line"] * 30)),
     ]
     for q, a in repetitive:
         out.append(rec(i, "repetitive", q, a))
         i += 1
 
-    out.append(rec(i, "too_short", "Hi", "ok"))
-    i += 1  # noqa: E702
-    out.append(rec(i, "too_short", "?", ""))
-    i += 1  # noqa: E702
-    out.append(
-        rec(
-            i,
-            "boilerplate",
+    too_short = [
+        ("Hi", "ok"),
+        ("?", ""),
+        ("x", "y"),
+        ("Go", "no"),
+    ]
+    for q, a in too_short:
+        out.append(rec(i, "too_short", q, a))
+        i += 1
+
+    boilerplate = [
+        (
             "Summarize the page",
             "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor "
             "incididunt ut labore et dolore magna aliqua. Lorem ipsum dolor sit amet.",
-        )
-    )
-    i += 1  # noqa: E702
-    out.append(
-        rec(
-            i,
-            "symbol_noise",
+        ),
+        (
+            "Extract the main idea",
+            "Please enable javascript to continue browsing this site. Cookie policy applies "
+            "to all visitors and must be accepted before content loads.",
+        ),
+        (
+            "What does the article say?",
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut enim ad minim veniam, "
+            "quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+        ),
+    ]
+    for q, a in boilerplate:
+        out.append(rec(i, "boilerplate", q, a))
+        i += 1
+
+    symbol_noise = [
+        (
             "Parse this",
             "#### $$$ @@@ ### %%% ^^^ &&& *** ((( ))) ### $$$ @@@ ### %%% ^^^ &&& *** {{{ }}} "
             ">>> <<< ### ||| ~~~ ### $$$ ok",
-        )
-    )
-    i += 1  # noqa: E702
+        ),
+        (
+            "Decode the blob",
+            "!!! ??? *** ### $$$ %%% ^^^ &&& *** ((( ))) [[[ ]]] {{{ }}} ||| ~~~ ``` ::: ;;; "
+            "@@@ ### $$$ %%% ^^^ &&& *** end",
+        ),
+        (
+            "Clean the tokens",
+            "@@@ ### $$$ %%% ^^^ &&& *** ((( ))) ### $$$ @@@ ### %%% ^^^ &&& *** {{{ }}} >>> "
+            "<<< ### ||| ~~~ ### $$$ ###",
+        ),
+    ]
+    for q, a in symbol_noise:
+        out.append(rec(i, "symbol_noise", q, a))
+        i += 1
 
     toxic = [
         (
@@ -157,13 +228,79 @@ def main() -> None:
             "Reply to the customer",
             "Tell that stupid idiot to go away, nobody cares about his pathetic loser complaints.",
         ),
+        (
+            "Rate this submission",
+            "This is trash from a dumb idiot. What a moron. Delete this garbage immediately.",
+        ),
+        (
+            "Moderate the thread",
+            "Ban that loser. He is a stupid idiot and a pathetic troll. Nobody wants him here.",
+        ),
+        (
+            "Give honest feedback",
+            "You sound like an idiot. Only a moron would write this garbage. Shut up already.",
+        ),
     ]
     for q, a in toxic:
         out.append(rec(i, "toxic", q, a))
         i += 1
 
+    # Clean controls / hard negatives: should survive every removal stage and not trip PII.
+    # Mild opinions, short-but-valid Q&A, numeric content, and a single mild swear below the
+    # toxicity lexicon threshold (max_hits=2) so precision has labelled negatives.
+    clean = [
+        (
+            "What is the capital of France?",
+            "Paris is the capital of France. It is known for museums, cuisine, and landmarks "
+            "such as the Eiffel Tower and the Louvre.",
+        ),
+        (
+            "Explain photosynthesis in simple terms.",
+            "Plants convert light energy into chemical energy. Chlorophyll absorbs sunlight, "
+            "and the plant uses water and carbon dioxide to make sugars and oxygen.",
+        ),
+        (
+            "List three primenumbers between 10 and 20.",
+            "11, 13, and 17 are prime. Each has no positive divisors other than one and itself.",
+        ),
+        (
+            "How do I reset a forgotten password?",
+            "Use the account recovery link on the sign-in page, verify your email, then choose "
+            "a new password that meets the length and complexity rules.",
+        ),
+        (
+            "Summarize why bees matter to agriculture.",
+            "Bees pollinate many food crops. Without them, yields of fruits, nuts, and some "
+            "vegetables would drop sharply, raising prices and reducing food diversity.",
+        ),
+        (
+            "What does HTTP status 404 mean?",
+            "It means the server could not find the requested resource. Check the URL spelling "
+            "or whether the page was moved or deleted.",
+        ),
+        (
+            # Near-miss: one mild lexicon hit should still be under max_hits=2.
+            "Is the movie worth watching?",
+            "It is pretty damn good if you like slow mysteries. The cast is strong and the "
+            "ending pays off without feeling cheap or confusing.",
+        ),
+        (
+            # Near-miss: symbols present but below max_symbol_word_ratio.
+            "Format a short checklist",
+            "1) Unpack the kit. 2) Charge the battery. 3) Pair the device. 4) Run the self-test. "
+            "5) Log the serial number in the inventory sheet.",
+        ),
+    ]
+    for q, a in clean:
+        out.append(rec(i, "clean", q, a))
+        i += 1
+
     OUT.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out))
+    from collections import Counter
+
+    counts = Counter(r["noise_type"] for r in out)
     print(f"wrote {len(out)} synthetic records to {OUT.relative_to(ROOT)}")
+    print("  " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
 
 
 if __name__ == "__main__":

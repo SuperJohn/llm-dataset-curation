@@ -1,4 +1,4 @@
-# Runs offline on the checked-in sample (1,500 Dolly records + 33 labelled synthetic "bad" records).
+# Runs offline on the checked-in sample (1,500 Dolly records + labelled synthetic noise (bad + clean controls)).
 name: dolly-sample
 input:
   paths:
