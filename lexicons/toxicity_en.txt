@@ -1,0 +1,20 @@
+# Minimal English insult / harassment lexicon used for the demo.
+# One term or phrase per line, case-insensitive, whole-word match.
+# For production, extend with a curated list (e.g. `make fetch-lexicon` pulls the
+# LDNOOBW English list into lexicons/ldnoobw_en.txt) and/or plug in a classifier
+# via stages.mitigation.toxicity.classifier.
+idiot
+idiots
+moron
+morons
+loser
+losers
+stupid idiot
+shut up
+pathetic
+go kill yourself
+kill yourself
+worthless
+scumbag
+dumbass
+garbage written by
