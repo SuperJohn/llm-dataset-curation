@@ -142,6 +142,32 @@ def _reason_table(run: RunResult) -> list[dict]:
     return rows
 
 
+def _fmt_rate(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return f"{v * 100:.1f}%"
+
+
+def _eval_rows(eval_metrics: dict) -> list[dict]:
+    """Flatten eval.per_stage into table rows for HTML/Markdown."""
+    rows = []
+    for stage, m in (eval_metrics.get("per_stage") or {}).items():
+        rows.append(
+            {
+                "stage": stage,
+                "kind": m.get("kind", ""),
+                "precision": _fmt_rate(m.get("precision")),
+                "recall": _fmt_rate(m.get("recall")),
+                "support": m.get("support", 0),
+                "tp": m.get("tp", 0),
+                "fp": m.get("fp", 0),
+                "fn": m.get("fn", 0),
+                "fp_scope": m.get("fp_scope", ""),
+            }
+        )
+    return rows
+
+
 def build_context(run: RunResult) -> dict:
     stage_stats = {r.name: r.stats for r in run.stages}
     pii = stage_stats.get("pii", {})
@@ -151,6 +177,7 @@ def build_context(run: RunResult) -> dict:
         for cid in top_ids:
             members = run.clusters.filter(pl.col("cluster_id") == cid).head(4).to_dicts()
             clusters.append({"id": cid, "members": members})
+    eval_metrics = getattr(run, "eval", None) or {}
     return {
         "name": run.config.name,
         "n_in": run.input_df.height,
@@ -163,6 +190,8 @@ def build_context(run: RunResult) -> dict:
         "stage_stats": stage_stats,
         "clusters": clusters,
         "examples": _removed_examples(run, run.config.output.max_removed_examples),
+        "eval": eval_metrics,
+        "eval_rows": _eval_rows(eval_metrics),
     }
 
 
@@ -199,6 +228,38 @@ def render_markdown(c: dict, assets: dict[str, str]) -> str:
         "|---|---|---:|",
         *[f"| {r['stage']} | {r['rule']} | {r['removed']} |" for r in c["reasons"]],
         "",
+    ]
+    if c.get("eval_rows"):
+        ev = c.get("eval") or {}
+        lines += [
+            "## Precision / Recall",
+            "",
+            "Measured on the labelled synthetic set (`noise_type`). "
+            "Removal-stage FP includes unlabeled Dolly rows, clean controls, and "
+            "wrong-stage synthetics. PII is detection-only; its FP scope is clean "
+            "controls only (Dolly PII excluded).",
+            "",
+        ]
+        if ev.get("n_clean_controls"):
+            surv = ev.get("clean_control_survival")
+            surv_s = "—" if surv is None else f"{surv * 100:.1f}%"
+            lines.append(
+                f"Clean controls: {ev.get('n_clean_controls', 0)} labelled, "
+                f"{ev.get('clean_controls_removed', 0)} removed "
+                f"(survival {surv_s})."
+            )
+            lines.append("")
+        lines += [
+            "| stage | kind | precision | recall | support | TP | FP | FN |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+            *[
+                f"| {r['stage']} | {r['kind']} | {r['precision']} | {r['recall']} | "
+                f"{r['support']} | {r['tp']} | {r['fp']} | {r['fn']} |"
+                for r in c["eval_rows"]
+            ],
+            "",
+        ]
+    lines += [
         "## Length distribution",
         "",
         f"![lengths]({assets['lengths']})",

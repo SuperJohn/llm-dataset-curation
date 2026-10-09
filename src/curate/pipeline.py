@@ -11,6 +11,7 @@ from pathlib import Path
 import polars as pl
 
 from curate.config import PipelineConfig
+from curate.eval import per_stage_metrics
 from curate.io import read_input, write_outputs
 from curate.stages import StageResult, dedupe, mitigation, normalize, quality
 
@@ -31,6 +32,7 @@ class RunResult:
     funnel: list[dict] = field(default_factory=list)
     clusters: pl.DataFrame | None = None
     out_dir: Path | None = None
+    eval: dict = field(default_factory=dict)
 
 
 def _enabled(cfg: PipelineConfig, name: str) -> bool:
@@ -90,7 +92,8 @@ def run_pipeline(cfg: PipelineConfig, write: bool = True) -> RunResult:
     if removed.is_empty():
         removed = df.clear().with_columns(pl.lit("").alias("_stage"), pl.lit("").alias("_reason"))
     clusters = next((r.stats.pop("_clusters") for r in results if "_clusters" in r.stats), None)
-    run = RunResult(cfg, input_df, df, removed, results, funnel, clusters)
+    eval_metrics = per_stage_metrics(input_df, removed, df)
+    run = RunResult(cfg, input_df, df, removed, results, funnel, clusters, eval=eval_metrics)
 
     if write:
         out_dir = cfg.resolve(cfg.output.dir)
@@ -105,6 +108,7 @@ def run_pipeline(cfg: PipelineConfig, write: bool = True) -> RunResult:
             "input_rows": input_df.height,
             "output_rows": df.height,
             "retention": round(df.height / max(input_df.height, 1), 4),
+            "eval": eval_metrics,
         }
         (out_dir / "stats.json").write_text(json.dumps(stats, indent=2, default=str))
         (out_dir / "config.resolved.json").write_text(cfg.model_dump_json(indent=2))

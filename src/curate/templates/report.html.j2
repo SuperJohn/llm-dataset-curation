@@ -21,6 +21,22 @@ pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:.4rem;
 {% for f in c.funnel %}<tr><td>{{ f.stage }}</td><td>{{ f.rows_in }}</td><td>{{ f.removed }}</td><td>{{ f.rows_out }}</td></tr>{% endfor %}</table>
 <h3>Removals by rule</h3><table><tr><th>stage</th><th>rule</th><th>removed</th></tr>
 {% for r in c.reasons %}<tr><td>{{ r.stage }}</td><td>{{ r.rule }}</td><td>{{ r.removed }}</td></tr>{% endfor %}</table>
+{% if c.eval_rows %}
+<h2>Precision / Recall</h2>
+<p class="muted">Measured on the labelled synthetic set (<code>noise_type</code>).
+Removal-stage FP includes unlabeled Dolly rows, clean controls, and wrong-stage synthetics.
+PII is detection-only; its FP scope is clean controls only.</p>
+{% if c.eval.get('n_clean_controls') %}
+<p>Clean controls: {{ c.eval.n_clean_controls }} labelled,
+{{ c.eval.clean_controls_removed }} removed
+(survival {{ "%.1f"|format((c.eval.clean_control_survival or 0)*100) }}%).</p>
+{% endif %}
+<table><tr><th>stage</th><th>kind</th><th>precision</th><th>recall</th><th>support</th><th>TP</th><th>FP</th><th>FN</th></tr>
+{% for r in c.eval_rows %}<tr>
+<td>{{ r.stage }}</td><td>{{ r.kind }}</td><td>{{ r.precision }}</td><td>{{ r.recall }}</td>
+<td>{{ r.support }}</td><td>{{ r.tp }}</td><td>{{ r.fp }}</td><td>{{ r.fn }}</td>
+</tr>{% endfor %}</table>
+{% endif %}
 <h2>Length distribution</h2><img src="data:image/png;base64,{{ charts.lengths }}">
 <table><tr>{% for k in c.lengths[0].keys() %}<th>{{ k }}</th>{% endfor %}</tr>
 {% for r in c.lengths %}<tr>{% for v in r.values() %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</table>
