@@ -2,7 +2,7 @@ SHELL := /bin/bash
 CONFIG ?= configs/sample.yaml
 RUN := uv run
 
-.PHONY: help setup run full test lint format report-example clean
+.PHONY: help setup run full test lint format build report-example clean
 
 help:  ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -28,9 +28,12 @@ lint:  ## Ruff lint
 format:  ## Ruff autoformat
 	$(RUN) ruff format . && $(RUN) ruff check --fix .
 
+build:  ## Build sdist + wheel into dist/
+	uv build
+
 report-example: full  ## Refresh docs/example-report from a full dolly-15k run
 	rm -rf docs/example-report && mkdir -p docs/example-report
 	cp -r output/dolly-15k/report.md output/dolly-15k/report.html output/dolly-15k/report_assets docs/example-report/
 
 clean:  ## Remove outputs and downloads
-	rm -rf output data/raw .pytest_cache
+	rm -rf output data/raw .pytest_cache dist build *.egg-info

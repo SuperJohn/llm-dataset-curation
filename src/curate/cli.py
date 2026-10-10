@@ -6,18 +6,27 @@ import argparse
 import json
 import logging
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import requests
 import yaml
 
-from curate import __version__
+from curate import __version__ as _fallback_version
 from curate.config import load_config
 
 DATASETS = {
     # CC BY-SA 3.0 — https://huggingface.co/datasets/databricks/databricks-dolly-15k
     "dolly-15k": "https://huggingface.co/datasets/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl",
 }
+
+
+def package_version() -> str:
+    """Installed distribution version, falling back to the in-tree constant."""
+    try:
+        return version("llm-dataset-curation")
+    except PackageNotFoundError:
+        return _fallback_version
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -73,7 +82,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="curate", description="LLM dataset curation pipeline")
-    p.add_argument("--version", action="version", version=f"curate {__version__}")
+    p.add_argument("--version", action="version", version=f"curate {package_version()}")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 

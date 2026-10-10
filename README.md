@@ -123,7 +123,7 @@ configs/            # sample.yaml (offline), dolly15k.yaml (full)
 lexicons/           # toxicity lexicon (extend or replace)
 data/sample/        # 1,500-record Dolly subset + 33 labelled synthetic noise records
 scripts/            # synthetic noise generator
-tests/              # 25 tests: unit tests per stage + end-to-end + CLI
+tests/              # unit tests per stage + end-to-end + CLI + packaging
 ```
 
 ## Known limitations & next steps
@@ -141,6 +141,46 @@ tests/              # 25 tests: unit tests per stage + end-to-end + CLI
   Spark). The stage interfaces were kept pure-function to make that straightforward.
 - **More quality signals:** perplexity filtering with a small LM, an instruction/response
   relevance score, and a decontamination check against eval benchmarks (n-gram overlap).
+
+
+## Install
+
+From a clone (development):
+
+```bash
+uv sync
+uv run curate --version
+uv run curate run --config configs/sample.yaml
+```
+
+From a built wheel:
+
+```bash
+uv build                                 # writes dist/*.whl and dist/*.tar.gz
+uv pip install dist/llm_dataset_curation-*.whl
+curate --version
+```
+
+GitHub Releases attach the same artifacts when a `v*` tag is pushed (see below).
+PyPI publish is optional and not wired up yet — drop a token into the release
+workflow later if you want `twine upload`.
+
+## Cutting a release
+
+Version is single-sourced in `src/curate/__init__.py` (`__version__`); hatchling
+reads it for the wheel/sdist metadata.
+
+1. Bump `__version__` (e.g. to `0.1.1`).
+2. Commit on `main`, then tag and push:
+   ```bash
+   git tag v0.1.1
+   git push origin main --tags
+   ```
+3. The **release** workflow (`.github/workflows/release.yml`) runs lint + tests,
+   builds the sdist and wheel with `uv build`, uploads them as Actions artifacts,
+   and attaches them to a GitHub Release for the tag.
+4. You can also trigger a build-only run via **Actions → release → Run workflow**
+   (no tag / no GitHub Release).
 
 ## Data & license
 
