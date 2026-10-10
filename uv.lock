@@ -393,7 +393,6 @@ wheels = [
 
 [[package]]
 name = "llm-dataset-curation"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "datasketch" },
