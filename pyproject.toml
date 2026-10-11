@@ -56,8 +56,18 @@ Changelog = "https://github.com/SuperJohn/llm-dataset-curation/releases"
 [project.scripts]
 curate = "curate.cli:main"
 
+[project.optional-dependencies]
+notebook = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+]
+
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.8"]
+dev = [
+    "nbformat>=5.11.1",
+    "pytest>=8",
+    "ruff>=0.8",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -78,6 +88,7 @@ include = [
     "/data/sample",
     "/scripts",
     "/docs",
+    "/notebooks",
     "/LICENSE",
     "/README.md",
     "/Makefile",
