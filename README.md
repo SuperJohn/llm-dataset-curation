@@ -88,6 +88,7 @@ make setup                    # uv sync
 make run                      # curate the checked-in sample
 make full                     # download databricks-dolly-15k (13 MB) and curate all of it
 make test                     # ruff + pytest
+make notebook                 # open the offline walkthrough notebook (needs --extra notebook)
 
 uv run curate run -c configs/sample.yaml \
     --set stages.near_dedupe.threshold=0.7 \
@@ -104,6 +105,10 @@ dup_clusters.parquet              # cluster_id, member, representative, est. Jac
 stats.json                        # funnel + per-stage stats + timings
 report.html / report.md           # eval report (HTML is self-contained)
 ```
+
+Step-by-step offline walkthrough (Python API + report exploration):
+[`notebooks/walkthrough.ipynb`](notebooks/walkthrough.ipynb). Install the optional
+Jupyter bits with `uv sync --extra notebook`, then `make notebook`.
 
 Bringing your own data takes one config: point `input.paths` at JSONL, Parquet, or CSV, and
 set `id_field` and `text_fields`.
@@ -123,6 +128,7 @@ configs/            # sample.yaml (offline), dolly15k.yaml (full)
 lexicons/           # toxicity lexicon (extend or replace)
 data/sample/        # 1,500-record Dolly subset + 33 labelled synthetic noise records
 scripts/            # synthetic noise generator
+notebooks/          # offline walkthrough of a sample run
 tests/              # unit tests per stage + end-to-end + CLI + packaging
 ```
 
@@ -149,6 +155,7 @@ From a clone (development):
 
 ```bash
 uv sync
+uv sync --extra notebook   # optional: Jupyter for notebooks/walkthrough.ipynb
 uv run curate --version
 uv run curate run --config configs/sample.yaml
 ```

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 CONFIG ?= configs/sample.yaml
 RUN := uv run
 
-.PHONY: help setup run full test lint format build report-example clean
+.PHONY: help setup run full test lint format build report-example notebook clean
 
 help:  ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -30,6 +30,9 @@ format:  ## Ruff autoformat
 
 build:  ## Build sdist + wheel into dist/
 	uv build
+
+notebook:  ## Open the offline walkthrough notebook
+	$(RUN) jupyter notebook notebooks/walkthrough.ipynb
 
 report-example: full  ## Refresh docs/example-report from a full dolly-15k run
 	rm -rf docs/example-report && mkdir -p docs/example-report
