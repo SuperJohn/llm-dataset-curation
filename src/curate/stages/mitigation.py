@@ -1,9 +1,11 @@
-"""Mitigation: PII redaction (regex + Luhn) and toxicity filtering (lexicon + classifier hook)."""
+"""Mitigation: PII redaction (regex + Luhn + optional NER hook) and toxicity filtering
+(lexicon + classifier hook)."""
 
 from __future__ import annotations
 
 import importlib
 import re
+import warnings
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -12,9 +14,14 @@ import polars as pl
 
 from curate.config import PIIConfig, ToxicityConfig
 from curate.io import with_combined_text
+from curate.ner import NER_LABELS, NerHook, load_ner
 from curate.stages import StageResult, removed_frame
 
 # --------------------------------------------------------------------------- PII
+_STREET_SUFFIX = (
+    r"Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl|"
+    r"Circle|Cir|Terrace|Ter|Parkway|Pkwy"
+)
 PII_PATTERNS: dict[str, re.Pattern[str]] = {
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     "us_ssn": re.compile(r"\b(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"),
@@ -23,9 +30,19 @@ PII_PATTERNS: dict[str, re.Pattern[str]] = {
         r"(?<![\w-])(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]?\d{3}[ .-]?\d{4}(?![\w-])"
     ),
     "ipv4": re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"),
+    # US street address: house number, optional direction, 1-4 capitalised or ordinal street
+    # words, then a street suffix ("123 Main Street", "350 5th Ave", "10 N. Elm St").
+    "street_address": re.compile(
+        r"(?<![\w.,/-])\d{1,6}[A-Za-z]?"
+        r"(?:\s+(?:[NSEW]|N[EW]|S[EW]|North|South|East|West)\.?)?"
+        r"(?:\s+(?:[A-Z][A-Za-z'-]*\.?|\d{1,3}(?:st|nd|rd|th))){1,4}?"
+        rf"\s+(?:{_STREET_SUFFIX})\b"
+    ),
 }
 # Order matters: SSN and card numbers before phone so digits aren't double-counted.
-PII_ORDER = ["email", "us_ssn", "credit_card", "phone", "ipv4"]
+# person_name has no regex: it comes only from the NER hook (PIIConfig.ner).
+PII_ORDER = ["email", "us_ssn", "credit_card", "phone", "ipv4", "street_address"]
+_PLACEHOLDER = re.compile("<(?:" + "|".join(t.upper() for t in {*PII_ORDER, *NER_LABELS}) + ")>")
 
 
 def luhn_ok(digits: str) -> bool:
@@ -42,7 +59,8 @@ def luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
-def redact_pii(text: str, types: list[str]) -> tuple[str, Counter]:
+def redact_pii(text: str, types: list[str], ner: NerHook | None = None) -> tuple[str, Counter]:
+    """Replace PII with typed placeholders. Regex types run first, then the optional NER hook."""
     hits: Counter = Counter()
     for t in PII_ORDER:
         if t not in types or not text:
@@ -56,16 +74,46 @@ def redact_pii(text: str, types: list[str]) -> tuple[str, Counter]:
             return f"<{t.upper()}>"
 
         text = pat.sub(_sub, text)
+    if ner is not None and text:
+        text = _apply_ner(text, types, ner, hits)
     return text, hits
 
 
+def _apply_ner(text: str, types: list[str], ner: NerHook, hits: Counter) -> str:
+    """Redact NER spans for enabled labels, skipping overlaps with each other and with
+    placeholders already inserted by the regex pass so nothing is counted twice."""
+    taken = [(m.start(), m.end()) for m in _PLACEHOLDER.finditer(text)]
+    spans: list[tuple[int, int, str]] = []
+    for start, end, label in sorted(ner(text), key=lambda s: (s[0], -s[1])):
+        if label not in types or label not in NER_LABELS or not 0 <= start < end <= len(text):
+            continue
+        if any(start < e and s < end for s, e in taken):
+            continue
+        taken.append((start, end))
+        spans.append((start, end, label))
+    # Right to left so earlier offsets stay valid.
+    for start, end, label in sorted(spans, reverse=True):
+        text = f"{text[:start]}<{label.upper()}>{text[end:]}"
+        hits[label] += 1
+    return text
+
+
 def run_pii(df: pl.DataFrame, cfg: PIIConfig, text_fields: list[str]) -> StageResult:
+    ner: NerHook | None = None
+    if cfg.ner and any(t in cfg.types for t in NER_LABELS):
+        ner = load_ner(cfg.ner)
+    elif "person_name" in cfg.types:
+        warnings.warn(
+            "pii.types includes person_name but pii.ner is not set; names will not be redacted "
+            "(e.g. ner: 'curate.ner:spacy_person_spans')",
+            stacklevel=2,
+        )
     rows = df.to_dicts()
     per_row_hits: list[dict] = []
     for row in rows:
         total: Counter = Counter()
         for f in text_fields:
-            row[f], h = redact_pii(row[f], cfg.types)
+            row[f], h = redact_pii(row[f], cfg.types, ner)
             total += h
         per_row_hits.append(dict(total))
     out = pl.DataFrame(rows, schema=df.schema)
@@ -100,6 +148,7 @@ def run_pii(df: pl.DataFrame, cfg: PIIConfig, text_fields: list[str]) -> StageRe
             "hit_rate": float((out["pii_hits"] > 0).mean() or 0.0),
             "hits_by_type": dict(by_type),
             "action": cfg.action,
+            "ner": cfg.ner,
         },
     )
 

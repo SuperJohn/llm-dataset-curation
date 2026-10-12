@@ -113,13 +113,29 @@ class QualityConfig(BaseModel):
     language: LanguageConfig = Field(default_factory=LanguageConfig)
 
 
+PIIType = Literal[
+    "email", "phone", "ipv4", "credit_card", "us_ssn", "street_address", "person_name"
+]
+
+
 class PIIConfig(BaseModel):
+    """PII redaction.
+
+    `street_address` and `person_name` are opt-in: they only run when listed in `types`.
+    Street addresses use a built-in US regex (no extra dependencies); an NER hook may add more.
+    Person names need an NER hook: set `ner` (e.g. "curate.ner:spacy_person_spans" with the
+    `ner` extra installed). Without one, `person_name` is skipped with a warning.
+    """
+
     enabled: bool = True
-    types: list[Literal["email", "phone", "ipv4", "credit_card", "us_ssn"]] = Field(
+    types: list[PIIType] = Field(
         default_factory=lambda: ["email", "phone", "ipv4", "credit_card", "us_ssn"]
     )
     action: Literal["redact", "drop"] = "redact"
     max_hits_before_drop: int | None = None  # with action=redact, drop docs that are PII-dense
+    # Optional "package.module:function" taking str -> list[(start, end, label)] where label is
+    # "person_name" or "street_address". See curate/ner.py.
+    ner: str | None = None
 
 
 class ToxicityConfig(BaseModel):
