@@ -40,7 +40,7 @@ pipelines, built the way I'd want a production data job to look:
 ```mermaid
 flowchart LR
     IN[(JSONL / Parquet / CSV<br/>config: input.paths)] --> N[normalize<br/>NFKC · control chars · whitespace]
-    N --> P[PII redaction<br/>email · phone · IPv4 · card+Luhn · SSN]
+    N --> P[PII redaction<br/>email · phone · IPv4 · card+Luhn · SSN<br/>street address · names via NER hook]
     P --> E[exact dedupe<br/>SHA-256 of key fields]
     E --> NN[near dedupe<br/>MinHash LSH · 5-gram shingles<br/>verified Jaccard · union-find clusters]
     NN --> Q[quality filters<br/>length · word length · symbols<br/>alpha ratio · dup lines · top n-gram<br/>boilerplate · language ID]
@@ -54,7 +54,7 @@ flowchart LR
 | Stage | What it does | Key config |
 |---|---|---|
 | `normalize` | Unicode NFKC, strips zero-width and control characters, collapses whitespace, rebuilds `text` from `input.text_fields` | `unicode_form` |
-| `pii` | Regex redaction to typed placeholders (`<EMAIL>`, `<PHONE>`, …). Card numbers must pass Luhn. Optionally drops PII-dense records. | `types`, `action: redact\|drop`, `max_hits_before_drop` |
+| `pii` | Regex redaction to typed placeholders (`<EMAIL>`, `<PHONE>`, …). Card numbers must pass Luhn. Opt-in `street_address` (US regex) and `person_name` (NER hook, e.g. spaCy via the `ner` extra). Optionally drops PII-dense records. | `types`, `ner`, `action: redact\|drop`, `max_hits_before_drop` |
 | `exact_dedupe` | SHA-256 over the chosen fields (case-insensitive) and keeps the first occurrence | `fields` |
 | `near_dedupe` | MinHash (128 perms) over word 5-grams, LSH candidates **verified** by estimated Jaccard, and union-find clusters that keep the earliest record | `threshold`, `ngram`, `num_perm`, `min_words`, `fields` |
 | `quality` | Gopher-style rules: word count, mean word length, `#`/ellipsis ratio, alphabetic-word fraction, duplicate-line fraction (per field), top 2/3/4-gram character coverage, banned boilerplate phrases, and language ID (py3langid restricted to common languages) | `min_words`, `max_top_ngram_char_fraction`, `language.*` |
@@ -140,8 +140,12 @@ tests/              # unit tests per stage + end-to-end + CLI + packaging
 - **The lexicon toxicity filter is deliberately crude.** On Dolly it flags one
   creative-writing prompt ("the cat should be hostile toward the dog"). The classifier hook
   is there for a real model such as Detoxify, or a small fine-tuned classifier.
-- **Regex PII has gaps.** It doesn't detect names or street addresses. Next step: a
-  Presidio/NER pass behind the same interface.
+- **Name and address PII is best-effort.** Street addresses use a US-format regex, so
+  non-US formats and addresses without a numbered street slip through. Names need an NER
+  hook (`pii.ner: "curate.ner:spacy_person_spans"`). With `en_core_web_sm` on the sample it
+  also tags public figures (Dolly is full of them) and one false positive on a clean control
+  ("Format a short checklist"), so it is off in `configs/sample.yaml`. Presidio, or a larger
+  spaCy model, would slot in behind the same hook.
 - **Scale.** Stages run in-process on Polars, which handles a few million records on a laptop.
   For billions: shard the input, run MinHash per shard, and do a global LSH join (e.g. Ray or
   Spark). The stage interfaces were kept pure-function to make that straightforward.
@@ -156,6 +160,8 @@ From a clone (development):
 ```bash
 uv sync
 uv sync --extra notebook   # optional: Jupyter for notebooks/walkthrough.ipynb
+uv sync --extra ner         # optional: spaCy for person-name PII, then fetch a model:
+uv pip install pip && uv run python -m spacy download en_core_web_sm
 uv run curate --version
 uv run curate run --config configs/sample.yaml
 ```
