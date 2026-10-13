@@ -68,6 +68,7 @@ ner = [
 [dependency-groups]
 dev = [
     "nbformat>=5.11.1",
+    "py3langid>=0.3",
     "pytest>=8",
     "ruff>=0.8",
 ]
@@ -89,6 +90,7 @@ include = [
     "/configs",
     "/lexicons",
     "/data/sample",
+    "/data/benchmarks",
     "/scripts",
     "/docs",
     "/notebooks",
