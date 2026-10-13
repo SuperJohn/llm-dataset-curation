@@ -1,6 +1,6 @@
 # Curation report — dolly-15k
 
-**15,011** records in → **14,939** kept (**99.5%** retention). PII redacted in 11 records.
+**15,011** records in → **14,941** kept (**99.5%** retention). PII redacted in 11 records.
 
 ## Funnel
 
@@ -13,8 +13,8 @@
 | pii | 15011 | 0 | 15011 |
 | exact_dedupe | 15011 | 16 | 14995 |
 | near_dedupe | 14995 | 10 | 14985 |
-| quality | 14985 | 45 | 14940 |
-| toxicity | 14940 | 1 | 14939 |
+| quality | 14985 | 43 | 14942 |
+| toxicity | 14942 | 1 | 14941 |
 
 ### Removals by rule
 
@@ -25,8 +25,8 @@
 | quality | repetitive_ngrams | 24 |
 | quality | duplicate_lines | 9 |
 | quality | alpha_fraction | 4 |
-| quality | language | 4 |
 | quality | too_short | 3 |
+| quality | language | 2 |
 | quality | mean_word_length | 1 |
 | toxicity | — | 1 |
 
@@ -37,7 +37,7 @@
 | dataset | records | mean_words | p50_words | p95_words | max_words |
 |---|---|---|---|---|---|
 | before | 15011 | 126.2 | 76.0 | 396.0 | 4435 |
-| after | 14939 | 125.6 | 75.0 | 392.0 | 4435 |
+| after | 14941 | 125.6 | 75.0 | 392.0 | 4435 |
 
 ## Near-duplicate clusters
 
