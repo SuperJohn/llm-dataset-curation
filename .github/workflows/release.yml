@@ -26,6 +26,12 @@ jobs:
       - name: Install (locked)
         run: uv sync --locked
 
+      - name: Cache fastText lid.176 model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/curate
+          key: lid176-ftz-v1
+
       - name: Lint + tests
         run: |
           uv run ruff check .

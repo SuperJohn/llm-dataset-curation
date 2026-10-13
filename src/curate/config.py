@@ -49,16 +49,22 @@ class NearDedupeConfig(BaseModel):
 
 
 class LanguageConfig(BaseModel):
+    """fastText `lid.176` language ID (see `curate.langid` for model download and caching)."""
+
     enabled: bool = True
     allowed: list[str] = Field(default_factory=lambda: ["en"])
+    # A row is dropped only when a disallowed language scores at least this fastText
+    # probability. English prompts dense with foreign names usually score well below 0.9 for
+    # the other language, so a high threshold is what keeps them.
     min_confidence: float = 0.5
     min_words: int = 6  # language ID is unreliable on very short strings
     # Which fields to run language ID on (None = combined text). For instruction data the
     # prompt is the best signal: responses are often lists of proper nouns, which confuse
     # character n-gram models, and translation tasks legitimately answer in another language.
     fields: list[str] | None = None
-    # Restricting langid to widely used languages avoids false positives such as English
-    # bullet lists being labelled Nigerian Pidgin ('pcm') or Welsh ('cy').
+    # lid.176 knows 176 labels. Restricting the pick to widely used languages avoids obscure
+    # calls such as an English name list labelled Tagalog ('tl') or Ilocano ('ilo'). The
+    # chosen label keeps its raw probability (no renormalisation over the candidates).
     candidates: list[str] | None = Field(
         default_factory=lambda: [
             "en",

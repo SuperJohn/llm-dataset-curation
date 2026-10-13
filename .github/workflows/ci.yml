@@ -23,6 +23,11 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
+      - name: Cache fastText lid.176 model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/curate
+          key: lid176-ftz-v1
       - name: Lint
         run: |
           uv run ruff check .

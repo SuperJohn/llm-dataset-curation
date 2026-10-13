@@ -1,4 +1,4 @@
-"""Heuristic quality filters (Gopher / C4 style) + language ID.
+"""Heuristic quality filters (Gopher / C4 style) + fastText lid.176 language ID.
 
 Every row gets a set of quality signals; a row is dropped with the *first* failing rule as its
 reason, and all signals are kept for the report so thresholds can be tuned from data.
@@ -6,14 +6,13 @@ reason, and all signals are kept for the report so thresholds can be tuned from 
 
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
-from functools import lru_cache
 
 import polars as pl
 
 from curate.config import QualityConfig
+from curate.langid import detect_language
 from curate.stages import StageResult, removed_frame
 
 _WORD = re.compile(r"\S+")
@@ -21,23 +20,7 @@ _ALPHA = re.compile(r"[^\W\d_]", re.UNICODE)
 # Gopher counts hash symbols and ellipses (not list bullets) relative to word count.
 _SYMBOL = re.compile(r"#|\.\.\.|\u2026")
 
-
-@lru_cache(maxsize=8)
-def _identifier(candidates: tuple[str, ...] | None):
-    from py3langid.langid import MODEL_FILE, LanguageIdentifier
-
-    ident = LanguageIdentifier.from_model_file(MODEL_FILE, norm_probs=False)
-    if candidates:
-        ident.set_languages(list(candidates))
-    return ident
-
-
-def detect_language(text: str, candidates: list[str] | None = None) -> tuple[str, float]:
-    """Return (ISO 639-1 code, softmax-normalized confidence)."""
-    ranked = _identifier(tuple(candidates) if candidates else None).rank(text)
-    best_lang, best = ranked[0]
-    total = sum(math.exp(s - best) for _, s in ranked)
-    return best_lang, 1.0 / total
+__all__ = ["detect_language", "first_failure", "run", "signals", "top_ngram_char_fraction"]
 
 
 def top_ngram_char_fraction(words: list[str], n: int) -> float:

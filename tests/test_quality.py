@@ -56,8 +56,16 @@ def test_signals_are_attached_to_kept_rows():
 
 
 def test_detect_language():
-    assert detect_language(GOOD)[0] == "en"
-    assert detect_language("Die Hauptstadt von Deutschland ist Berlin und sehr schön.")[0] == "de"
+    lang, conf = detect_language(GOOD)
+    assert lang == "en" and conf > 0.9
+    lang, conf = detect_language("Die Hauptstadt von Deutschland ist Berlin und sehr schön.")
+    assert lang == "de" and conf > 0.9
+
+
+def test_signals_record_fasttext_language_and_confidence():
+    cfg = QualityConfig()
+    sig = quality.signals(GOOD, cfg)
+    assert sig["lang"] == "en" and 0.9 < sig["lang_conf"] <= 1.0
 
 
 def test_top_ngram_fraction():
