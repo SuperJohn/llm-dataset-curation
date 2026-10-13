@@ -5,7 +5,7 @@
 
 A config-driven pipeline for cleaning instruction or pretraining text before it goes
 anywhere near a model. It normalizes, removes **exact and near duplicates (MinHash
-LSH)**, applies **Gopher/C4-style quality heuristics** and language ID, **redacts PII**,
+LSH)**, applies **Gopher/C4-style quality heuristics** and fastText language ID, **redacts PII**,
 filters **toxic** content, and writes an **eval report** that shows exactly what was
 removed and why.
 
@@ -57,7 +57,7 @@ flowchart LR
 | `pii` | Regex redaction to typed placeholders (`<EMAIL>`, `<PHONE>`, …). Card numbers must pass Luhn. Opt-in `street_address` (US regex) and `person_name` (NER hook, e.g. spaCy via the `ner` extra). Optionally drops PII-dense records. | `types`, `ner`, `action: redact\|drop`, `max_hits_before_drop` |
 | `exact_dedupe` | SHA-256 over the chosen fields (case-insensitive) and keeps the first occurrence | `fields` |
 | `near_dedupe` | MinHash (128 perms) over word 5-grams, LSH candidates **verified** by estimated Jaccard, and union-find clusters that keep the earliest record | `threshold`, `ngram`, `num_perm`, `min_words`, `fields` |
-| `quality` | Gopher-style rules: word count, mean word length, `#`/ellipsis ratio, alphabetic-word fraction, duplicate-line fraction (per field), top 2/3/4-gram character coverage, banned boilerplate phrases, and language ID (py3langid restricted to common languages) | `min_words`, `max_top_ngram_char_fraction`, `language.*` |
+| `quality` | Gopher-style rules: word count, mean word length, `#`/ellipsis ratio, alphabetic-word fraction, duplicate-line fraction (per field), top 2/3/4-gram character coverage, banned boilerplate phrases, and language ID (fastText `lid.176`: best label among common languages, gated on its raw probability) | `min_words`, `max_top_ngram_char_fraction`, `language.*` |
 | `toxicity` | Whole-word lexicon matching (phrases allowed) with hit count and fraction thresholds. Any `module:function` scorer can be plugged in (e.g. Detoxify). | `lexicon_paths`, `max_hits`, `classifier` |
 
 For instruction data, the **identity of an example is `instruction + response`**, so
@@ -65,12 +65,38 @@ several questions about the same context passage are *not* duplicates. Language 
 on the **prompt**, because responses are often lists of proper nouns, and translation
 tasks legitimately answer in another language.
 
+### Language ID
+
+Language ID uses Facebook's fastText [`lid.176`](https://fasttext.cc/docs/en/language-identification.html)
+model (compressed `.ftz`, ~0.9 MB, CC BY-SA 3.0). It is downloaded once to
+`~/.cache/curate/` (or `$XDG_CACHE_HOME/curate/`) with a pinned SHA-256, and every run
+after that is offline. Set `CURATE_LID_MODEL=/path/to/lid.176.ftz` on air-gapped machines,
+or point it at the 131 MB `lid.176.bin`, which did better on the name-heavy and "pour over
+coffee" prompts in spot checks. A record is dropped only when a disallowed language scores at least
+`language.min_confidence`, using fastText's own probability. It is not renormalised over the
+candidate list, so an English question full of foreign names stays low-confidence instead
+of becoming a confident Spanish call.
+
+It replaced py3langid ([#2](https://github.com/SuperJohn/llm-dataset-curation/issues/2)).
+`scripts/benchmark_langid.py` scores both on
+[37 labelled prompts](data/benchmarks/langid_prompts.jsonl): 25 English questions dense with
+foreign proper nouns ("Who was Octávio Tarquínio de Sousa?", "Who was Hô Chí Minh?") and
+12 short prompts in 9 other languages.
+
+| Detector | English false flags @ 0.5 | @ 0.9 | Non-English recall @ 0.5 | @ 0.9 | Dolly-15k prompts flagged @ 0.9 |
+|---|---:|---:|---:|---:|---:|
+| py3langid (before) | 11 / 25 | 9 / 25 | 100% | 100% | 4 (3 English) |
+| fastText `lid.176.ftz` | **1 / 25** | **1 / 25** | 100% | 92% | **2 (1 English)** |
+
+The remaining fastText miss is "How do I make good pour over coffee?", which comes out
+French at 0.97 because of *pour*. At 0.9, the Swedish prompt (0.84) also slips through.
+
 ## Results
 
 | Run | In | Kept | Exact dup | Near dup | Quality | Toxic | PII redacted | Runtime |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `configs/sample.yaml` (1,500 Dolly + 33 synthetic) | 1,533 | 1,482 | 22 | 11 | 16 | 2 | 14 records | ~5 s |
-| `configs/dolly15k.yaml` (full dataset) | 15,011 | 14,939 | 16 | 10 | 45 | 1 | 11 records (22 hits) | ~15 s |
+| `configs/dolly15k.yaml` (full dataset) | 15,011 | 14,941 | 16 | 10 | 43 | 1 | 11 records (22 hits) | ~15 s |
 
 The [example report](docs/example-report/report.md) includes the funnel, the length
 distribution before and after, near-duplicate cluster sizes with examples, PII hit rates
@@ -94,6 +120,7 @@ uv run curate run -c configs/sample.yaml \
     --set stages.near_dedupe.threshold=0.7 \
     --set stages.mitigation.pii.action=drop
 uv run curate validate -c configs/sample.yaml   # print the fully-resolved config
+uv run python scripts/benchmark_langid.py       # fastText vs py3langid (add --dolly data/raw/dolly-15k.jsonl)
 ```
 
 Outputs, written to `output.dir`:
@@ -120,6 +147,7 @@ src/curate/
   cli.py            # curate run | download | validate
   config.py         # pydantic models for the YAML config
   io.py             # readers, combined-text builder, writers
+  langid.py         # fastText lid.176 download, cache, and language detection
   pipeline.py       # stage orchestration + funnel accounting
   report.py         # matplotlib charts, DuckDB summaries, HTML/Markdown report
   classifiers.py    # optional toxicity-classifier hooks
@@ -127,16 +155,18 @@ src/curate/
 configs/            # sample.yaml (offline), dolly15k.yaml (full)
 lexicons/           # toxicity lexicon (extend or replace)
 data/sample/        # 1,500-record Dolly subset + 33 labelled synthetic noise records
-scripts/            # synthetic noise generator
+data/benchmarks/    # labelled prompts for the language-ID benchmark
+scripts/            # synthetic noise generator, language-ID benchmark
 notebooks/          # offline walkthrough of a sample run
 tests/              # unit tests per stage + end-to-end + CLI + packaging
 ```
 
 ## Known limitations & next steps
 
-- **Language ID on short or name-heavy prompts is noisy.** A handful of English prompts
-  full of foreign proper nouns ("Who was Octávio Tarquínio de Sousa?") get flagged.
-  Next step: fastText `lid.176` with per-language confidence thresholds.
+- **Language ID still misses on short prompts with a loaded word.** fastText `lid.176` fixed
+  most false flags on English prompts full of foreign names (11 → 1 of 25 on the benchmark),
+  but "How do I make good pour over coffee?" still comes out French. Next steps: per-language
+  confidence thresholds, or a second vote from the response for short prompts.
 - **The lexicon toxicity filter is deliberately crude.** On Dolly it flags one
   creative-writing prompt ("the cat should be hostile toward the dog"). The classifier hook
   is there for a real model such as Detoxify, or a small fine-tuned classifier.
@@ -202,4 +232,6 @@ reads it for the wheel/sdist metadata.
   contain excerpts of it.
 - Synthetic noise records are generated by `scripts/make_synthetic_noise.py`. All "PII" in
   them is fake (example.com addresses, 555 numbers, documentation IP ranges, test card numbers).
+- fastText `lid.176` language-ID model by Facebook, licensed **CC BY-SA 3.0**. It is
+  downloaded at runtime, not vendored.
 - Code: MIT.
