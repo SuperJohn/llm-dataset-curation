@@ -64,6 +64,10 @@ notebook = [
 ner = [
     "spacy>=3.7",
 ]
+toxicity = [
+    "torch>=2.3",
+    "transformers>=4.44",
+]
 
 [dependency-groups]
 dev = [
