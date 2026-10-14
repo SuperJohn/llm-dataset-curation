@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -151,7 +151,11 @@ class ToxicityConfig(BaseModel):
     max_hit_fraction: float = 0.05
     # Optional "package.module:function" taking list[str] -> list[float] (prob. toxic).
     classifier: str | None = None
-    classifier_threshold: float = 0.8
+    classifier_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    # The stage feeds the scorer this many texts per call, so memory stays flat on big runs.
+    classifier_batch_size: int = Field(default=32, ge=1)
+    # Extra keyword arguments for the scorer, e.g. {model: unitary/toxic-bert, device: cpu}.
+    classifier_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class MitigationConfig(BaseModel):

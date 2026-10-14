@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import time
 import warnings
 from collections import Counter
 from collections.abc import Callable
@@ -171,9 +172,36 @@ def compile_lexicon(terms: list[str]) -> re.Pattern[str] | None:
     return re.compile(rf"(?<!\w)(?:{alt})(?!\w)", re.IGNORECASE)
 
 
-def load_classifier(spec: str) -> Callable[[list[str]], list[float]]:
+def load_classifier(spec: str) -> Callable[..., list[float]]:
     module, _, fn = spec.partition(":")
+    if not module or not fn:
+        raise ValueError(
+            f"toxicity.classifier must look like 'package.module:function', got {spec!r}"
+        )
     return getattr(importlib.import_module(module), fn)
+
+
+def score_in_batches(
+    scorer: Callable[..., list[float]],
+    texts: list[str],
+    batch_size: int,
+    options: dict | None = None,
+) -> list[float]:
+    """Call `scorer` on fixed-size batches and check it returns one probability per text."""
+    options = options or {}
+    scores: list[float] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        out = [float(s) for s in scorer(batch, **options)]
+        if len(out) != len(batch):
+            raise ValueError(
+                f"toxicity classifier returned {len(out)} scores for a batch of {len(batch)}"
+            )
+        bad = [s for s in out if not 0.0 <= s <= 1.0]
+        if bad:
+            raise ValueError(f"toxicity classifier scores must be in [0, 1], got {bad[0]!r}")
+        scores.extend(out)
+    return scores
 
 
 def run_toxicity(df: pl.DataFrame, cfg: ToxicityConfig, base_dir: Path) -> StageResult:
@@ -190,8 +218,21 @@ def run_toxicity(df: pl.DataFrame, cfg: ToxicityConfig, base_dir: Path) -> Stage
         (pl.col("tox_hit_frac") > cfg.max_hit_fraction) & (pl.col("tox_lexicon_hits") > 0)
     )
     reason = pl.format("toxic lexicon: {} hits", "tox_lexicon_hits")
+    clf_stats: dict = {}
     if cfg.classifier:
-        scores = load_classifier(cfg.classifier)(texts)
+        t0 = time.perf_counter()
+        scores = score_in_batches(
+            load_classifier(cfg.classifier),
+            texts,
+            cfg.classifier_batch_size,
+            cfg.classifier_options,
+        )
+        clf_stats = {
+            "classifier_threshold": cfg.classifier_threshold,
+            "classifier_batch_size": cfg.classifier_batch_size,
+            "classifier_flagged": int(sum(s >= cfg.classifier_threshold for s in scores)),
+            "classifier_seconds": round(time.perf_counter() - t0, 3),
+        }
         out = out.with_columns(pl.Series("tox_classifier_score", scores, dtype=pl.Float64))
         clf_flag = pl.col("tox_classifier_score") >= cfg.classifier_threshold
         reason = (
@@ -213,5 +254,6 @@ def run_toxicity(df: pl.DataFrame, cfg: ToxicityConfig, base_dir: Path) -> Stage
         stats={
             "docs_with_lexicon_hits": int(sum(h > 0 for h in hits)),
             "classifier": cfg.classifier,
+            **clf_stats,
         },
     )

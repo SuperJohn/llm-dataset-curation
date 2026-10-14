@@ -1,9 +1,16 @@
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from curate.config import PIIConfig, ToxicityConfig
-from curate.stages.mitigation import luhn_ok, redact_pii, run_pii, run_toxicity
+from curate.stages.mitigation import (
+    luhn_ok,
+    redact_pii,
+    run_pii,
+    run_toxicity,
+    score_in_batches,
+)
 
 ALL = ["email", "phone", "ipv4", "credit_card", "us_ssn"]
 
@@ -76,3 +83,53 @@ def test_toxicity_classifier_hook(tmp_path: Path):
     res = run_toxicity(df, cfg, tmp_path)
     assert res.removed["id"].to_list() == ["b"]
     assert "tox_classifier_score" in res.kept.columns
+
+
+def test_classifier_runs_in_batches_with_options():
+    calls: list[tuple[int, str]] = []
+
+    def scorer(texts: list[str], tag: str = "") -> list[float]:
+        calls.append((len(texts), tag))
+        return [0.5] * len(texts)
+
+    scores = score_in_batches(scorer, [f"t{i}" for i in range(7)], 3, {"tag": "x"})
+    assert scores == [0.5] * 7
+    assert calls == [(3, "x"), (3, "x"), (1, "x")]
+
+
+@pytest.mark.parametrize(
+    "bad_scorer, match",
+    [
+        (lambda texts: [0.1], "returned 1 scores for a batch of 2"),
+        (lambda texts: [0.1, 1.7], r"must be in \[0, 1\]"),
+    ],
+)
+def test_classifier_output_is_validated(bad_scorer, match):
+    with pytest.raises(ValueError, match=match):
+        score_in_batches(bad_scorer, ["a", "b"], 8)
+
+
+def test_classifier_stats_and_reason(tmp_path: Path):
+    lex = tmp_path / "lex.txt"
+    lex.write_text("")
+    df = pl.DataFrame({"id": list("abcde"), "text": ["fine", "flag me", "ok", "flag me", "x"]})
+    cfg = ToxicityConfig(
+        lexicon_paths=[str(lex)],
+        classifier="curate.classifiers:keyword_demo_scores",
+        classifier_threshold=0.5,
+        classifier_batch_size=2,
+    )
+    res = run_toxicity(df, cfg, tmp_path)
+    assert res.removed["id"].to_list() == ["b", "d"]
+    assert res.removed["_reason"].to_list() == ["toxicity classifier score 0.9"] * 2
+    assert res.stats["classifier_flagged"] == 2
+    assert res.stats["classifier_batch_size"] == 2
+
+
+def test_bad_classifier_spec_is_rejected(tmp_path: Path):
+    lex = tmp_path / "lex.txt"
+    lex.write_text("")
+    df = pl.DataFrame({"id": ["a"], "text": ["fine"]})
+    cfg = ToxicityConfig(lexicon_paths=[str(lex)], classifier="curate.classifiers")
+    with pytest.raises(ValueError, match="package.module:function"):
+        run_toxicity(df, cfg, tmp_path)
