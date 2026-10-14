@@ -58,7 +58,7 @@ flowchart LR
 | `exact_dedupe` | SHA-256 over the chosen fields (case-insensitive) and keeps the first occurrence | `fields` |
 | `near_dedupe` | MinHash (128 perms) over word 5-grams, LSH candidates **verified** by estimated Jaccard, and union-find clusters that keep the earliest record | `threshold`, `ngram`, `num_perm`, `min_words`, `fields` |
 | `quality` | Gopher-style rules: word count, mean word length, `#`/ellipsis ratio, alphabetic-word fraction, duplicate-line fraction (per field), top 2/3/4-gram character coverage, banned boilerplate phrases, and language ID (fastText `lid.176`: best label among common languages, gated on its raw probability) | `min_words`, `max_top_ngram_char_fraction`, `language.*` |
-| `toxicity` | Whole-word lexicon matching (phrases allowed) with hit count and fraction thresholds. Any `module:function` scorer can be plugged in (e.g. Detoxify). | `lexicon_paths`, `max_hits`, `classifier` |
+| `toxicity` | Whole-word lexicon matching (phrases allowed) with hit count and fraction thresholds, plus an optional classifier: any `module:function` scorer, called in batches. A Hugging Face scorer ships built in (`unitary/toxic-bert` by default). | `lexicon_paths`, `max_hits`, `classifier`, `classifier_threshold`, `classifier_batch_size`, `classifier_options` |
 
 For instruction data, the **identity of an example is `instruction + response`**, so
 several questions about the same context passage are *not* duplicates. Language ID runs
@@ -90,6 +90,44 @@ foreign proper nouns ("Who was Octávio Tarquínio de Sousa?", "Who was Hô Chí
 
 The remaining fastText miss is "How do I make good pour over coffee?", which comes out
 French at 0.97 because of *pour*. At 0.9, the Swedish prompt (0.84) also slips through.
+
+### Toxicity classifier
+
+The lexicon is fast and explainable but crude, so the stage can also call a model. Point
+`toxicity.classifier` at any `"module:function"` that maps a list of strings to
+probabilities in [0, 1]. The stage feeds it `classifier_batch_size` texts at a time, passes
+`classifier_options` as keyword arguments, checks that every batch returns one score in
+range per text, and drops a record when the score reaches `classifier_threshold` (or the
+lexicon fires). Each kept record keeps its `tox_classifier_score`, and `stats.json` records
+how many records the model flagged and how long it took.
+
+`curate.classifiers:hf_toxicity_scores` wraps any Hugging Face sequence-classification
+checkpoint. It loads once per process, runs under `torch.inference_mode()`, and reads the
+probability of one named label, using a sigmoid for multi-label heads (like toxic-bert's
+toxic, insult, threat, and so on) and a softmax for single-label heads.
+
+```bash
+uv sync --extra toxicity      # transformers + torch (CPU wheels are enough)
+uv run curate run -c configs/sample.yaml \
+    --set stages.mitigation.toxicity.classifier=curate.classifiers:hf_toxicity_scores \
+    --set stages.mitigation.toxicity.classifier_options.model=unitary/toxic-bert
+```
+
+```yaml
+toxicity:
+  classifier: "curate.classifiers:hf_toxicity_scores"
+  classifier_threshold: 0.8
+  classifier_batch_size: 32
+  classifier_options: {model: unitary/toxic-bert, label: toxic, device: cpu, max_length: 256}
+```
+
+On the sample (1,499 records reach this stage), [`unitary/toxic-bert`](https://huggingface.co/unitary/toxic-bert)
+at 0.8 flags the same 5 synthetic insults as the lexicon (scores 0.976 to 0.992), with
+precision and recall of 1.0 on the labelled set. It clears the one Dolly record the lexicon
+hits once (a Taylor Swift tour-guest list, score 0.001), and no clean record scores above 0.54
+(the top one is "snow will kill you instantly", a survival answer). The median score is
+0.0008. That took 135 s on 8 CPU cores, against well under a second for the lexicon,
+so it's off by default in `configs/sample.yaml`.
 
 ## Results
 
@@ -168,8 +206,11 @@ tests/              # unit tests per stage + end-to-end + CLI + packaging
   but "How do I make good pour over coffee?" still comes out French. Next steps: per-language
   confidence thresholds, or a second vote from the response for short prompts.
 - **The lexicon toxicity filter is deliberately crude.** On Dolly it flags one
-  creative-writing prompt ("the cat should be hostile toward the dog"). The classifier hook
-  is there for a real model such as Detoxify, or a small fine-tuned classifier.
+  creative-writing prompt ("the cat should be hostile toward the dog"). The built-in
+  Hugging Face scorer gives that record 0.54, under the 0.8 threshold, but it costs about
+  90 ms per record on CPU. Next
+  steps: run the model only on records the lexicon or a cheap first pass marks as borderline,
+  sort batches by length to cut padding, and try a distilled checkpoint.
 - **Name and address PII is best-effort.** Street addresses use a US-format regex, so
   non-US formats and addresses without a numbered street slip through. Names need an NER
   hook (`pii.ner: "curate.ner:spacy_person_spans"`). With `en_core_web_sm` on the sample it
@@ -192,6 +233,7 @@ uv sync
 uv sync --extra notebook   # optional: Jupyter for notebooks/walkthrough.ipynb
 uv sync --extra ner         # optional: spaCy for person-name PII, then fetch a model:
 uv pip install pip && uv run python -m spacy download en_core_web_sm
+uv sync --extra toxicity    # optional: transformers + torch for the Hugging Face toxicity scorer
 uv run curate --version
 uv run curate run --config configs/sample.yaml
 ```
@@ -234,4 +276,6 @@ reads it for the wheel/sdist metadata.
   them is fake (example.com addresses, 555 numbers, documentation IP ranges, test card numbers).
 - fastText `lid.176` language-ID model by Facebook, licensed **CC BY-SA 3.0**. It is
   downloaded at runtime, not vendored.
+- `unitary/toxic-bert` (optional toxicity classifier) by Unitary, licensed **Apache 2.0**.
+  It is downloaded from Hugging Face only when you turn the classifier on.
 - Code: MIT.

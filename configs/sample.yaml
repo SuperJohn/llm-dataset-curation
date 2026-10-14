@@ -49,5 +49,9 @@ stages:
       lexicon_paths: [lexicons/toxicity_en.txt]
       max_hits: 2
       max_hit_fraction: 0.05
-      classifier: null      # e.g. "curate.classifiers:detoxify_scores"
+      # Optional model scorer (uv sync --extra toxicity), off here because it takes ~2 min on CPU:
+      # classifier: "curate.classifiers:hf_toxicity_scores"
+      # classifier_options: {model: unitary/toxic-bert, label: toxic}
+      classifier: null
       classifier_threshold: 0.8
+      classifier_batch_size: 32
