@@ -19,7 +19,15 @@ log = logging.getLogger(__name__)
 
 # PII redaction runs immediately after normalization so that no downstream artifact
 # (dedupe clusters, removed samples, the report) ever contains raw PII.
-STAGE_ORDER = ["normalize", "pii", "exact_dedupe", "near_dedupe", "quality", "toxicity"]
+STAGE_ORDER = [
+    "normalize",
+    "pii",
+    "exact_dedupe",
+    "near_dedupe",
+    "semantic_dedupe",
+    "quality",
+    "toxicity",
+]
 
 
 @dataclass
@@ -33,6 +41,7 @@ class RunResult:
     clusters: pl.DataFrame | None = None
     out_dir: Path | None = None
     eval: dict = field(default_factory=dict)
+    semantic_clusters: pl.DataFrame | None = None
 
 
 def _enabled(cfg: PipelineConfig, name: str) -> bool:
@@ -42,6 +51,7 @@ def _enabled(cfg: PipelineConfig, name: str) -> bool:
         "pii": s.mitigation.pii.enabled,
         "exact_dedupe": s.exact_dedupe.enabled,
         "near_dedupe": s.near_dedupe.enabled,
+        "semantic_dedupe": s.semantic_dedupe.enabled,
         "quality": s.quality.enabled,
         "toxicity": s.mitigation.toxicity.enabled,
     }[name]
@@ -57,6 +67,8 @@ def _run_stage(name: str, df: pl.DataFrame, cfg: PipelineConfig) -> StageResult:
         return dedupe.exact_dedupe(df, s.exact_dedupe)
     if name == "near_dedupe":
         return dedupe.near_dedupe(df, s.near_dedupe)
+    if name == "semantic_dedupe":
+        return dedupe.semantic_dedupe(df, s.semantic_dedupe)
     if name == "quality":
         return quality.run(df, s.quality, fields)
     if name == "toxicity":
@@ -92,8 +104,22 @@ def run_pipeline(cfg: PipelineConfig, write: bool = True) -> RunResult:
     if removed.is_empty():
         removed = df.clear().with_columns(pl.lit("").alias("_stage"), pl.lit("").alias("_reason"))
     clusters = next((r.stats.pop("_clusters") for r in results if "_clusters" in r.stats), None)
+    semantic_clusters = next(
+        (r.stats.pop("_semantic_clusters") for r in results if "_semantic_clusters" in r.stats),
+        None,
+    )
     eval_metrics = per_stage_metrics(input_df, removed, df)
-    run = RunResult(cfg, input_df, df, removed, results, funnel, clusters, eval=eval_metrics)
+    run = RunResult(
+        cfg,
+        input_df,
+        df,
+        removed,
+        results,
+        funnel,
+        clusters,
+        eval=eval_metrics,
+        semantic_clusters=semantic_clusters,
+    )
 
     if write:
         out_dir = cfg.resolve(cfg.output.dir)
@@ -101,6 +127,8 @@ def run_pipeline(cfg: PipelineConfig, write: bool = True) -> RunResult:
         removed.write_parquet(out_dir / "removed.parquet")
         if clusters is not None:
             clusters.write_parquet(out_dir / "dup_clusters.parquet")
+        if semantic_clusters is not None:
+            semantic_clusters.write_parquet(out_dir / "semantic_clusters.parquet")
         stats = {
             "name": cfg.name,
             "funnel": funnel,

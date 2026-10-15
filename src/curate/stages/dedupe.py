@@ -1,14 +1,16 @@
-"""Exact (hash) and near (MinHash LSH) deduplication."""
+"""Exact (hash), near (MinHash LSH) and semantic (embedding) deduplication."""
 
 from __future__ import annotations
 
 import hashlib
 import re
 
+import numpy as np
 import polars as pl
 from datasketch import MinHash, MinHashLSH
 
-from curate.config import ExactDedupeConfig, NearDedupeConfig
+from curate.config import ExactDedupeConfig, NearDedupeConfig, SemanticDedupeConfig
+from curate.embeddings import embed_in_batches, load_embedder, similar_pairs
 from curate.stages import StageResult, removed_frame
 
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -143,5 +145,72 @@ def near_dedupe(df: pl.DataFrame, cfg: NearDedupeConfig) -> StageResult:
             "skipped_short": skipped,
             "num_perm": cfg.num_perm,
             "_clusters": clusters,
+        },
+    )
+
+
+# ---------------------------------------------------------------- semantic
+def semantic_dedupe(df: pl.DataFrame, cfg: SemanticDedupeConfig) -> StageResult:
+    texts = _key_text(df, cfg.fields).to_list()
+    emb = embed_in_batches(load_embedder(cfg.embedder), texts, cfg.batch_size, cfg.embedder_options)
+    short = np.array(
+        [bool(cfg.min_words) and len(_WORD.findall(t)) < cfg.min_words for t in texts], dtype=bool
+    )
+    if short.any():
+        emb = emb.copy()
+        emb[short] = 0.0  # zero vectors never clear a positive threshold
+    uf = _UnionFind()
+    pairs = 0
+    for i, j, _ in similar_pairs(emb, cfg.threshold, cfg.index):
+        if short[i] or short[j]:
+            continue
+        pairs += 1
+        uf.union(i, j)
+
+    rep = [uf.find(i) for i in range(len(texts))]
+    ids = df["id"].to_list()
+    cos = [None if rep[i] == i else float(emb[i] @ emb[rep[i]]) for i in range(len(texts))]
+    df = df.with_columns(
+        pl.Series("_rep", rep, dtype=pl.Int64),
+        pl.Series("_rep_id", [ids[r] for r in rep], dtype=pl.Utf8),
+        pl.Series("_cos", cos, dtype=pl.Float64),
+    ).with_row_index("_row")
+
+    sizes = df.group_by("_rep").agg(pl.len().alias("cluster_size"))
+    clusters = (
+        df.join(sizes, on="_rep")
+        .filter(pl.col("cluster_size") > 1)
+        .select(
+            pl.col("_rep_id").alias("cluster_id"),
+            "id",
+            (pl.col("_row") == pl.col("_rep")).alias("is_representative"),
+            pl.col("_cos").alias("cosine_to_rep"),
+            "cluster_size",
+            pl.col("text").str.slice(0, 300).alias("text_preview"),
+        )
+        .sort(["cluster_size", "cluster_id", "is_representative"], descending=[True, False, True])
+    )
+    kept = df.filter(pl.col("_row") == pl.col("_rep"))
+    dropped = df.filter(pl.col("_row") != pl.col("_rep"))
+    removed = removed_frame(
+        dropped,
+        "semantic_dedupe",
+        pl.format("semantic duplicate of {} (cos≈{})", "_rep_id", pl.col("_cos").round(2)),
+    )
+    tmp = ["_row", "_rep", "_rep_id", "_cos"]
+    return StageResult(
+        name="semantic_dedupe",
+        kept=kept.drop(tmp),
+        removed=removed.drop(tmp),
+        stats={
+            "clusters": int(clusters["cluster_id"].n_unique()) if clusters.height else 0,
+            "largest_cluster": int(clusters["cluster_size"].max() or 0) if clusters.height else 0,
+            "similar_pairs": pairs,
+            "threshold": cfg.threshold,
+            "embedder": cfg.embedder,
+            "index": cfg.index,
+            "dim": int(emb.shape[1]) if emb.size else 0,
+            "skipped_short": int(short.sum()),
+            "_semantic_clusters": clusters,
         },
     )

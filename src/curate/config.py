@@ -48,6 +48,23 @@ class NearDedupeConfig(BaseModel):
     min_words: int = 0  # skip very short records (templated prompts look alike but aren't dups)
 
 
+class SemanticDedupeConfig(BaseModel):
+    """Embedding near-duplicate detection (see `curate.embeddings`). Off by default.
+
+    Runs after MinHash, so it only sees what lexical dedupe kept and catches rewordings
+    that share meaning but not 5-gram shingles.
+    """
+
+    enabled: bool = False
+    fields: list[str] | None = None
+    embedder: str = "curate.embeddings:hashing_embeddings"
+    embedder_options: dict[str, Any] = Field(default_factory=dict)
+    threshold: float = Field(0.9, ge=-1.0, le=1.0)  # cosine similarity
+    batch_size: int = Field(256, gt=0)
+    index: Literal["exact", "faiss"] = "exact"
+    min_words: int = 0
+
+
 class LanguageConfig(BaseModel):
     """fastText `lid.176` language ID (see `curate.langid` for model download and caching)."""
 
@@ -167,6 +184,7 @@ class StagesConfig(BaseModel):
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
     exact_dedupe: ExactDedupeConfig = Field(default_factory=ExactDedupeConfig)
     near_dedupe: NearDedupeConfig = Field(default_factory=NearDedupeConfig)
+    semantic_dedupe: SemanticDedupeConfig = Field(default_factory=SemanticDedupeConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     mitigation: MitigationConfig = Field(default_factory=MitigationConfig)
 
