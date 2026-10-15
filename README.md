@@ -57,6 +57,7 @@ flowchart LR
 | `pii` | Regex redaction to typed placeholders (`<EMAIL>`, `<PHONE>`, …). Card numbers must pass Luhn. Opt-in `street_address` (US regex) and `person_name` (NER hook, e.g. spaCy via the `ner` extra). Optionally drops PII-dense records. | `types`, `ner`, `action: redact\|drop`, `max_hits_before_drop` |
 | `exact_dedupe` | SHA-256 over the chosen fields (case-insensitive) and keeps the first occurrence | `fields` |
 | `near_dedupe` | MinHash (128 perms) over word 5-grams, LSH candidates **verified** by estimated Jaccard, and union-find clusters that keep the earliest record | `threshold`, `ngram`, `num_perm`, `min_words`, `fields` |
+| `semantic_dedupe` (opt-in) | Embeds the chosen fields with any `module:function` embedder, finds pairs at or above a cosine threshold (blocked numpy search, or FAISS), and clusters them with the same union-find as MinHash. Off by default. | `enabled`, `embedder`, `embedder_options`, `threshold`, `index`, `min_words`, `fields` |
 | `quality` | Gopher-style rules: word count, mean word length, `#`/ellipsis ratio, alphabetic-word fraction, duplicate-line fraction (per field), top 2/3/4-gram character coverage, banned boilerplate phrases, and language ID (fastText `lid.176`: best label among common languages, gated on its raw probability) | `min_words`, `max_top_ngram_char_fraction`, `language.*` |
 | `toxicity` | Whole-word lexicon matching (phrases allowed) with hit count and fraction thresholds, plus an optional classifier: any `module:function` scorer, called in batches. A Hugging Face scorer ships built in (`unitary/toxic-bert` by default). | `lexicon_paths`, `max_hits`, `classifier`, `classifier_threshold`, `classifier_batch_size`, `classifier_options` |
 
@@ -128,6 +129,33 @@ hits once (a Taylor Swift tour-guest list, score 0.001), and no clean record sco
 (the top one is "snow will kill you instantly", a survival answer). The median score is
 0.0008. That took 135 s on 8 CPU cores, against well under a second for the lexicon,
 so it's off by default in `configs/sample.yaml`.
+
+### Semantic dedupe (opt-in)
+
+MinHash only catches copies that share word 5-grams, so a record with every fourth word
+changed slips past it. `semantic_dedupe` runs right after MinHash and compares records by
+embedding cosine similarity instead:
+
+```yaml
+stages:
+  semantic_dedupe:
+    enabled: true
+    fields: [instruction, response]
+    threshold: 0.9          # cosine similarity
+    min_words: 20
+    embedder: "curate.embeddings:hashing_embeddings"   # default, no download
+    # embedder: "curate.embeddings:sentence_transformer_embeddings"  # uv sync --extra semantic
+    # embedder_options: {model: sentence-transformers/all-MiniLM-L6-v2}
+    index: exact            # or faiss (uv sync --extra semantic)
+```
+
+The default embedder hashes word and character 3-gram features, so it needs no model and is
+deterministic, but it only finds rewordings that keep most of the vocabulary. A
+sentence-transformers model is what catches real paraphrases. `index: exact` is a blocked
+brute-force search in numpy (O(n²) work, O(block · n) memory, fine up to roughly 100k rows);
+`index: faiss` gives the same pairs from an exact inner-product index. Clusters are written
+to `semantic_clusters.parquet`. A side-by-side comparison with MinHash on Dolly is still to
+come in [#4](https://github.com/SuperJohn/llm-dataset-curation/issues/4).
 
 ## Results
 
@@ -234,6 +262,7 @@ uv sync --extra notebook   # optional: Jupyter for notebooks/walkthrough.ipynb
 uv sync --extra ner         # optional: spaCy for person-name PII, then fetch a model:
 uv pip install pip && uv run python -m spacy download en_core_web_sm
 uv sync --extra toxicity    # optional: transformers + torch for the Hugging Face toxicity scorer
+uv sync --extra semantic    # optional: sentence-transformers + faiss-cpu for semantic dedupe
 uv run curate --version
 uv run curate run --config configs/sample.yaml
 ```
