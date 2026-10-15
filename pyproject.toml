@@ -17,6 +17,8 @@ keywords = [
     "data-quality",
     "nlp",
     "toxicity",
+    "embeddings",
+    "semantic-dedupe",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -67,6 +69,10 @@ ner = [
 toxicity = [
     "torch>=2.3",
     "transformers>=4.44",
+]
+semantic = [
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
 ]
 
 [dependency-groups]
