@@ -154,8 +154,51 @@ deterministic, but it only finds rewordings that keep most of the vocabulary. A
 sentence-transformers model is what catches real paraphrases. `index: exact` is a blocked
 brute-force search in numpy (O(n²) work, O(block · n) memory, fine up to roughly 100k rows);
 `index: faiss` gives the same pairs from an exact inner-product index. Clusters are written
-to `semantic_clusters.parquet`. A side-by-side comparison with MinHash on Dolly is still to
-come in [#4](https://github.com/SuperJohn/llm-dataset-curation/issues/4).
+to `semantic_clusters.parquet`.
+
+#### MinHash vs embeddings
+
+`make compare-dedupe` builds a labelled benchmark from the 1,500-record Dolly sample: 50
+sources each get one perturbed copy per kind below, plus 50 hard negatives (one record's
+instruction with an unrelated record's response, whose donor is dropped so the pair has no true
+match). Each method runs on its own over the same 1,700 rows, on `[instruction, response]`.
+A removal is correct only when the copy lands in its own source's cluster
+([`curate.dedupe_compare`](src/curate/dedupe_compare.py),
+[`scripts/compare_dedupe.py`](scripts/compare_dedupe.py)).
+
+| method | removed | false pos. | precision | light edit | 15% words dropped | sentences shuffled | every 4th word swapped |
+|---|---|---|---|---|---|---|---|
+| MinHash J ≥ 0.8 (pipeline default) | 66 | 16 | 0.76 | 0.90 | 0.00 | 0.10 | 0.00 |
+| MinHash J ≥ 0.5 | 122 | 22 | 0.82 | 0.98 | 0.12 | 0.90 | 0.00 |
+| hashing embedder, cos ≥ 0.9 | 192 | 25 | 0.87 | 0.98 | 0.94 | 0.98 | 0.44 |
+| all-MiniLM-L6-v2, cos ≥ 0.95 | 172 | 24 | 0.86 | 0.98 | 0.94 | 0.94 | 0.10 |
+| all-MiniLM-L6-v2, cos ≥ 0.9 | 194 | 32 | 0.84 | 0.98 | 0.92 | 0.92 | 0.42 |
+
+The last four columns are recall per perturbation. What it shows:
+
+- MinHash on word 5-grams is precise about light edits and nothing else. Dropping 15% of
+  words or swapping every fourth word breaks almost every shingle, so recall is near zero even
+  at J ≥ 0.5; shuffled sentences only come back once the threshold is loosened.
+- Both embedders recover dropped-word and shuffled copies (0.92 to 0.98) at similar precision.
+  Neither is good on the every-fourth-word swap, which destroys meaning as well as wording;
+  that case is closer to noise than to a paraphrase.
+- Most false positives are not mistakes. 13 to 24 of them are original Dolly rows, and spot
+  checks show they are real near-copies already in the dataset (the same "How can I decide what
+  bike I should get?" answer twice, for example), so precision here is a lower bound. Hard
+  negatives fooled MinHash and the hashing embedder 2 to 3 times and MiniLM never.
+- Cost: on 8 CPU cores MinHash took 0.4 s, the hashing embedder 0.7 s and MiniLM 7 to 13 s
+  (model load included) for 1,700 rows, with sentence-transformers 6.1, faiss-cpu 1.15 and
+  CPU torch 2.14.
+
+So the defaults stay as they are: MinHash at 0.8 is the cheap first pass, and
+`semantic_dedupe` with the hashing embedder is the opt-in second pass that catches most of what
+it misses at no model cost. MiniLM was the only method no hard negative fooled, so it is worth
+the download when shared prompts and templated questions are common.
+
+```bash
+make compare-dedupe                                                  # MinHash + hashing, offline
+uv sync --extra semantic && uv run python scripts/compare_dedupe.py --sentence-transformers
+```
 
 ## Results
 
