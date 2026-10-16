@@ -2,7 +2,7 @@ SHELL := /bin/bash
 CONFIG ?= configs/sample.yaml
 RUN := uv run
 
-.PHONY: help setup run full test lint format build report-example notebook clean
+.PHONY: help setup run full test lint format build report-example notebook compare-dedupe clean
 
 help:  ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -33,6 +33,9 @@ build:  ## Build sdist + wheel into dist/
 
 notebook:  ## Open the offline walkthrough notebook
 	$(RUN) jupyter notebook notebooks/walkthrough.ipynb
+
+compare-dedupe:  ## MinHash vs embedding near-dedupe on a labelled benchmark
+	$(RUN) python scripts/compare_dedupe.py
 
 report-example: full  ## Refresh docs/example-report from a full dolly-15k run
 	rm -rf docs/example-report && mkdir -p docs/example-report
